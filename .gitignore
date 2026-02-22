@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+.venv/
+.env
+
+# local qdrant artifacts from dry runs
+/data/
+
+# local export artifacts
+/hf_export/
+/hf_export_smoke/
