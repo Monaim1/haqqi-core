@@ -23,7 +23,7 @@ def extract_pdf_page_texts(pdf_path: Path, logger: logging.Logger) -> list[str]:
         do_chart_extraction=False,
         do_code_enrichment=False,
         do_formula_enrichment=False,
-        do_ocr=True,
+        do_ocr=False,
         force_backend_text=True,
         generate_page_images=False,
         generate_picture_images=False,
