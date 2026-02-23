@@ -3,13 +3,13 @@ from __future__ import annotations
 import json
 import logging
 import re
+import unicodedata
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from hashlib import sha1
 from pathlib import Path
 from typing import Any, Literal
-import unicodedata
-import uuid
 
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
@@ -18,10 +18,12 @@ from src.config import Settings
 from src.services.semantic_search.pdf_parser import extract_pdf_page_texts
 
 _PUNCTUATION_SPLIT_RE = re.compile(r"[.;:!?]\s")
+_PARAGRAPH_SPLIT_RE = re.compile(r"\n{2,}")
 
 
 def _normalize_text(text: str) -> str:
     cleaned = text.replace("\x00", " ").replace("\r", "\n")
+    cleaned = "".join(ch if (ch == "\n" or ch == "\t" or ord(ch) >= 32) else " " for ch in cleaned)
     cleaned = re.sub(r"[ \t]+", " ", cleaned)
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
     return cleaned.strip()
@@ -38,240 +40,6 @@ def _simplify_for_match(text: str) -> str:
         else:
             normalized_chars.append(" ")
     return " ".join("".join(normalized_chars).split())
-
-
-@dataclass(slots=True)
-class ParsedSegment:
-    text: str
-    segment_type: str
-    article_id: str | None
-    act_type: str | None
-
-
-@dataclass(slots=True)
-class PageParseResult:
-    segments: list[ParsedSegment]
-    skipped_toc: bool = False
-    skipped_boilerplate: bool = False
-
-
-class LegalPageParser:
-    _SEGMENT_STARTERS = ("article", "chapitre", "section", "titre", "livre", "dahir", "loi", "decret", "arrete")
-    _ACT_TYPES = {"dahir", "loi", "decret", "arrete"}
-    _TOC_MARKERS = ("sommaire", "textes particuliers")
-    _BOILERPLATE_PREFIXES = (
-        "pages pages",
-        "bulletin officiel",
-        "issn",
-        "royaume du maroc",
-        "edition",
-        "imprimerie officielle",
-        "tarifs d abonnement",
-        "abonnement",
-        "au maroc",
-        "a l etranger",
-    )
-
-    def parse_page(self, raw_text: str) -> PageParseResult:
-        page_text = self.normalize_page_text(raw_text)
-        if not page_text:
-            return PageParseResult(segments=[])
-
-        lines = [line for line in page_text.splitlines() if line]
-        if self.is_toc_page(lines):
-            return PageParseResult(segments=[], skipped_toc=True)
-
-        content_lines = self.strip_boilerplate_lines(lines)
-        if not content_lines:
-            return PageParseResult(segments=[], skipped_boilerplate=True)
-
-        segment_texts = self.split_legal_elements("\n".join(content_lines))
-        if not segment_texts:
-            segment_texts = [_normalize_text("\n".join(content_lines))]
-
-        segments = [
-            ParsedSegment(
-                text=segment,
-                segment_type=self.detect_segment_type(segment),
-                article_id=self.extract_article_id(segment),
-                act_type=self.extract_act_type(segment),
-            )
-            for segment in segment_texts
-            if segment
-        ]
-        return PageParseResult(segments=segments)
-
-    def normalize_page_text(self, text: str) -> str:
-        if not text:
-            return ""
-        cleaned = text.replace("\x00", " ").replace("\r", "\n")
-        lines = [" ".join(line.split()) for line in cleaned.split("\n")]
-        return "\n".join(lines).strip()
-
-    def is_boilerplate_line(self, line: str) -> bool:
-        normalized = _simplify_for_match(line)
-        if not normalized:
-            return False
-
-        parts = normalized.split()
-        if len(parts) == 1 and parts[0].isdigit() and len(parts[0]) <= 4:
-            return True
-
-        if any(normalized.startswith(prefix) for prefix in self._BOILERPLATE_PREFIXES):
-            return True
-
-        if "bulletin officiel" in normalized and parts:
-            first = parts[0]
-            if first.isdigit() or first in {"n", "no"}:
-                return True
-
-        return False
-
-    def _looks_like_toc_entry(self, line: str) -> bool:
-        if line.count(".") < 3:
-            return False
-        tokens = line.rstrip().split()
-        if not tokens:
-            return False
-        page_token = tokens[-1].rstrip(".)")
-        return page_token.isdigit() and len(page_token) <= 4
-
-    def is_toc_page(self, lines: list[str]) -> bool:
-        content_lines = [line for line in lines if line.strip()]
-        if not content_lines:
-            return False
-
-        dotted_line_count = sum(1 for line in content_lines if self._looks_like_toc_entry(line))
-        has_toc_marker = any(
-            marker in _simplify_for_match(line)
-            for line in content_lines[:30]
-            for marker in self._TOC_MARKERS
-        )
-        return dotted_line_count >= 5 or (has_toc_marker and dotted_line_count >= 3)
-
-    def strip_boilerplate_lines(self, lines: list[str]) -> list[str]:
-        return [line for line in lines if line.strip() and not self.is_boilerplate_line(line)]
-
-    def _starts_new_segment(self, text: str) -> bool:
-        normalized = _simplify_for_match(text)
-        if not normalized:
-            return False
-        first_token = normalized.split(" ", 1)[0]
-        return first_token in self._SEGMENT_STARTERS
-
-    def split_legal_elements(self, page_text: str) -> list[str]:
-        lines = [line.strip() for line in page_text.splitlines() if line.strip()]
-        if not lines:
-            return []
-
-        raw_segments: list[str] = []
-        buffer: list[str] = []
-        for line in lines:
-            if self._starts_new_segment(line) and buffer:
-                raw_segments.append(" ".join(buffer).strip())
-                buffer = [line]
-            else:
-                buffer.append(line)
-
-        if buffer:
-            raw_segments.append(" ".join(buffer).strip())
-
-        merged: list[str] = []
-        for segment in raw_segments:
-            if merged and len(segment) < 180 and not self._starts_new_segment(segment):
-                merged[-1] = f"{merged[-1]} {segment}".strip()
-            else:
-                merged.append(segment)
-        return merged
-
-    def detect_segment_type(self, text: str) -> str:
-        normalized = _simplify_for_match(text)
-        if not normalized:
-            return "paragraph"
-
-        first_token = normalized.split(" ", 1)[0]
-        if first_token == "article":
-            return "article"
-        if first_token == "chapitre":
-            return "chapter"
-        if first_token == "section":
-            return "section"
-        if first_token in self._ACT_TYPES:
-            return "legal_act"
-        return "paragraph"
-
-    @staticmethod
-    def _looks_like_article_id(token: str) -> bool:
-        if not token:
-            return False
-        if token == "premier":
-            return True
-        if token.isdigit():
-            return True
-
-        roman_chars = set("ivxlcdm")
-        if all(ch in roman_chars for ch in token):
-            return True
-
-        if "-" in token:
-            parts = [part for part in token.split("-") if part]
-            return bool(parts) and all(part.isdigit() for part in parts)
-
-        return False
-
-    def extract_article_id(self, text: str) -> str | None:
-        tokens = _simplify_for_match(text).split()
-        for idx, token in enumerate(tokens[:-1]):
-            if token != "article":
-                continue
-            candidate = tokens[idx + 1]
-            if self._looks_like_article_id(candidate):
-                return candidate
-        return None
-
-    def extract_act_type(self, text: str) -> str | None:
-        normalized = _simplify_for_match(text)
-        if not normalized:
-            return None
-        first_token = normalized.split(" ", 1)[0]
-        if first_token in self._ACT_TYPES:
-            return first_token
-        return None
-
-
-_DEFAULT_PAGE_PARSER = LegalPageParser()
-
-
-def _normalize_page_text(text: str) -> str:
-    return _DEFAULT_PAGE_PARSER.normalize_page_text(text)
-
-
-def _is_boilerplate_line(line: str) -> bool:
-    return _DEFAULT_PAGE_PARSER.is_boilerplate_line(line)
-
-
-def _is_toc_page(lines: list[str]) -> bool:
-    return _DEFAULT_PAGE_PARSER.is_toc_page(lines)
-
-
-def _strip_boilerplate_lines(lines: list[str]) -> list[str]:
-    return _DEFAULT_PAGE_PARSER.strip_boilerplate_lines(lines)
-
-
-def _split_legal_elements(page_text: str) -> list[str]:
-    return _DEFAULT_PAGE_PARSER.split_legal_elements(page_text)
-
-
-def _detect_segment_type(text: str) -> str:
-    return _DEFAULT_PAGE_PARSER.detect_segment_type(text)
-
-
-def _extract_article_id(text: str) -> str | None:
-    return _DEFAULT_PAGE_PARSER.extract_article_id(text)
-
-
-def _extract_act_type(text: str) -> str | None:
-    return _DEFAULT_PAGE_PARSER.extract_act_type(text)
 
 
 def _find_split_index(text: str, split_start: int, target_end: int) -> int | None:
@@ -317,6 +85,58 @@ def _chunk_text(text: str, chunk_size: int, chunk_overlap: int) -> list[str]:
     return chunks
 
 
+def _split_page_into_segments(page_text: str) -> list[str]:
+    normalized = _normalize_text(page_text)
+    if not normalized:
+        return []
+
+    paragraphs = [part.strip() for part in _PARAGRAPH_SPLIT_RE.split(normalized) if part.strip()]
+    if not paragraphs:
+        return [normalized]
+
+    # Merge tiny fragments into neighboring paragraphs to avoid indexing headers/noise as standalone chunks.
+    segments: list[str] = []
+    for paragraph in paragraphs:
+        if segments and len(paragraph) < 80:
+            segments[-1] = f"{segments[-1]} {paragraph}".strip()
+            continue
+        segments.append(paragraph)
+    return segments
+
+
+def _detect_segment_type(text: str) -> str:
+    first_token = _simplify_for_match(text).split(" ", 1)[0] if text else ""
+    if first_token == "article":
+        return "article"
+    if first_token == "chapitre":
+        return "chapter"
+    if first_token == "section":
+        return "section"
+    if first_token in {"dahir", "loi", "decret", "arrete"}:
+        return "legal_act"
+    return "paragraph"
+
+
+def _extract_article_id(text: str) -> str | None:
+    tokens = _simplify_for_match(text).split()
+    for idx, token in enumerate(tokens[:-1]):
+        if token != "article":
+            continue
+        candidate = tokens[idx + 1]
+        if candidate in {"premier"} or candidate.isdigit():
+            return candidate
+        if all(ch in set("ivxlcdm") for ch in candidate):
+            return candidate
+    return None
+
+
+def _extract_act_type(text: str) -> str | None:
+    first_token = _simplify_for_match(text).split(" ", 1)[0] if text else ""
+    if first_token in {"dahir", "loi", "decret", "arrete"}:
+        return first_token
+    return None
+
+
 @dataclass(slots=True)
 class ChunkRecord:
     id: str
@@ -360,7 +180,6 @@ class IngestionService:
     def __init__(self, settings: Settings):
         self._settings = settings
         self._logger = logging.getLogger(__name__)
-        self._page_parser = LegalPageParser()
 
     def ingest_collection(
         self,
@@ -599,11 +418,7 @@ class IngestionService:
         return report
 
     def _extract_records(self, pdf_path: Path) -> tuple[list[ChunkRecord], DocumentIngestionStats]:
-        page_texts = extract_pdf_page_texts(
-            pdf_path=pdf_path,
-            backend=self._settings.pdf_parser_backend,
-            logger=self._logger,
-        )
+        page_texts = extract_pdf_page_texts(pdf_path=pdf_path, logger=self._logger)
         sidecar_metadata = self._load_sidecar_metadata(pdf_path)
         base_metadata = self._sanitize_metadata(
             {
@@ -611,6 +426,8 @@ class IngestionService:
                 "file_path": str(pdf_path),
                 "source_file": str(pdf_path),
                 "source_filename": pdf_path.name,
+                "parser_backend": "docling",
+                "parser_model": "ibm-granite/granite-docling-258M",
             }
         )
         source_fingerprint = self._build_source_fingerprint(pdf_path, sidecar_metadata)
@@ -621,27 +438,27 @@ class IngestionService:
         pages_skipped_toc = 0
         pages_skipped_boilerplate = 0
         segments_indexed = 0
+
         for page_idx, raw_text in enumerate(page_texts, start=1):
-            parsed_page = self._page_parser.parse_page(raw_text)
-            if not parsed_page.segments and not parsed_page.skipped_toc and not parsed_page.skipped_boilerplate:
+            segments = _split_page_into_segments(raw_text)
+            if not segments:
                 pages_without_extractable_text += 1
                 continue
 
-            if parsed_page.skipped_toc:
-                pages_skipped_toc += 1
-                continue
-
-            if parsed_page.skipped_boilerplate:
-                pages_skipped_boilerplate += 1
-                continue
-
             page_had_records = False
-            for segment_idx, segment in enumerate(parsed_page.segments, start=1):
+            for segment_idx, segment_text in enumerate(segments, start=1):
                 chunks = _chunk_text(
-                    text=segment.text,
+                    text=segment_text,
                     chunk_size=self._settings.default_chunk_size,
                     chunk_overlap=self._settings.default_chunk_overlap,
                 )
+                if not chunks:
+                    continue
+
+                segment_type = _detect_segment_type(segment_text)
+                article_id = _extract_article_id(segment_text)
+                act_type = _extract_act_type(segment_text)
+
                 for chunk_idx, chunk in enumerate(chunks, start=1):
                     id_str = f"{source_fingerprint}:p{page_idx:04d}:s{segment_idx:04d}:c{chunk_idx:04d}"
                     records.append(
@@ -655,9 +472,9 @@ class IngestionService:
                                     "page_start": page_idx,
                                     "page_end": page_idx,
                                     "segment_index": segment_idx,
-                                    "segment_type": segment.segment_type,
-                                    "article_id": segment.article_id,
-                                    "act_type": segment.act_type,
+                                    "segment_type": segment_type,
+                                    "article_id": article_id,
+                                    "act_type": act_type,
                                     "chunk_index": chunk_idx,
                                     "chunk_char_count": len(chunk),
                                 }
@@ -665,8 +482,7 @@ class IngestionService:
                         )
                     )
                     page_had_records = True
-                if chunks:
-                    segments_indexed += 1
+                segments_indexed += 1
 
             if page_had_records:
                 pages_indexed += 1

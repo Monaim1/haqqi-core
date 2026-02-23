@@ -5,6 +5,7 @@ Standalone open-source pipeline for legal-document retrieval:
 - Qdrant vector store
 - FastEmbed dense + sparse retrieval
 - Optional ColBERT late-interaction reranking
+- Docling PDF parsing with Granite Docling 258M (single parser path)
 
 ## Quickstart (5 minutes)
 
@@ -82,7 +83,6 @@ curl -X POST http://127.0.0.1:8000/api/v1/query \
 Main env vars:
 - `HAQQI_CORE_SOURCE_DIR` default: `data/raw-bulletin-officiel`
 - `HAQQI_CORE_SOURCE_GLOB_PATTERN` default: `**/*.pdf`
-- `HAQQI_CORE_PDF_PARSER_BACKEND` default: `auto` (`auto`, `pypdf`, `docling`)
 - `HAQQI_CORE_QDRANT_PATH` default: `data/qdrant`
 - `HAQQI_CORE_QDRANT_COLLECTION_NAME` default: `moroccan_law`
 - `HAQQI_CORE_RETRIEVAL_RERANKER_MODE` default: `late_interaction` (`none` or `late_interaction`)
@@ -93,14 +93,9 @@ Override source directory at runtime:
 HAQQI_CORE_SOURCE_DIR=/path/to/your/pdfs uv run haqqi ingest --limit 10
 ```
 
-Use Docling parser backend:
-
-```bash
-uv add docling
-HAQQI_CORE_PDF_PARSER_BACKEND=docling uv run haqqi ingest --limit 10
-```
-
-`auto` will try Docling first (if installed), then fall back to `pypdf`.
+PDF parsing is fixed to Docling + `ibm-granite/granite-docling-258M`.
+No table extraction pipeline is enabled in this project.
+The first ingestion run downloads Granite model artifacts from Hugging Face.
 
 ## Common Pitfalls
 
@@ -113,6 +108,9 @@ HAQQI_CORE_PDF_PARSER_BACKEND=docling uv run haqqi ingest --limit 10
 - ColBERT fallback warning:
   - Cause: ColBERT collection not ingested yet.
   - Fix: run ingestion without `--no-colbert`.
+- Docling Granite download error:
+  - Cause: model artifacts were not downloaded yet and the machine is offline.
+  - Fix: run ingestion once with internet access to cache `ibm-granite/granite-docling-258M`.
 
 ## Layout
 

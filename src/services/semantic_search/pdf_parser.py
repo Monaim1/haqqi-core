@@ -4,97 +4,96 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from pypdf import PdfReader
-
-_KNOWN_BACKENDS = {"auto", "pypdf", "docling"}
+_EXPECTED_MODEL_REPO = "ibm-granite/granite-docling-258M"
 
 
-def extract_pdf_page_texts(pdf_path: Path, backend: str, logger: logging.Logger) -> list[str]:
-    backend_name = backend.strip().lower()
-    if backend_name not in _KNOWN_BACKENDS:
-        raise ValueError(f"Unknown parser backend: {backend}")
-
-    if backend_name == "pypdf":
-        return _extract_with_pypdf(pdf_path)
-
-    if backend_name == "docling":
-        return _extract_with_docling(pdf_path)
-
+def extract_pdf_page_texts(pdf_path: Path, logger: logging.Logger) -> list[str]:
     try:
-        return _extract_with_docling(pdf_path)
+        from docling.datamodel.base_models import InputFormat
+        from docling.datamodel.pipeline_options import VlmPipelineOptions
+        from docling.document_converter import DocumentConverter, PdfFormatOption
+        from docling.pipeline.vlm_pipeline import VlmPipeline
     except Exception as exc:  # noqa: BLE001
-        logger.warning("Docling parser unavailable for %s. Falling back to pypdf: %s", pdf_path.name, exc)
-        return _extract_with_pypdf(pdf_path)
+        raise RuntimeError(
+            "Docling is required for PDF parsing. Install project dependencies with `uv sync`."
+        ) from exc
 
+    options = VlmPipelineOptions()
+    model_spec = getattr(getattr(options, "vlm_options", None), "model_spec", None)
+    default_repo_id = getattr(model_spec, "default_repo_id", None)
+    if default_repo_id != _EXPECTED_MODEL_REPO:
+        raise RuntimeError(
+            f"Unexpected Docling model preset: {default_repo_id!r}. Expected {_EXPECTED_MODEL_REPO!r}."
+        )
 
-def _extract_with_pypdf(pdf_path: Path) -> list[str]:
-    reader = PdfReader(str(pdf_path))
-    return [page.extract_text() or "" for page in reader.pages]
+    # This project only extracts text; table/layout-heavy processing is intentionally disabled.
+    if hasattr(options, "do_table_structure"):
+        setattr(options, "do_table_structure", False)
+    if hasattr(options, "do_cell_matching"):
+        setattr(options, "do_cell_matching", False)
+    if hasattr(options, "do_picture_classification"):
+        setattr(options, "do_picture_classification", False)
+    if hasattr(options, "do_picture_description"):
+        setattr(options, "do_picture_description", False)
 
-
-def _extract_with_docling(pdf_path: Path) -> list[str]:
+    converter = DocumentConverter(
+        format_options={
+            InputFormat.PDF: PdfFormatOption(
+                pipeline_cls=VlmPipeline,
+                pipeline_options=options,
+            )
+        }
+    )
     try:
-        from docling.document_converter import DocumentConverter
+        result = converter.convert(str(pdf_path))
     except Exception as exc:  # noqa: BLE001
-        raise RuntimeError("Docling is not installed. Install it and set HAQQI_CORE_PDF_PARSER_BACKEND=docling.") from exc
+        message = str(exc)
+        if "huggingface.co" in message or "snapshot folder" in message or "LocalEntryNotFoundError" in message:
+            raise RuntimeError(
+                "Docling Granite model is not available locally. "
+                "Connect to the internet once to download "
+                "'ibm-granite/granite-docling-258M', then retry ingestion."
+            ) from exc
+        raise
+    document = getattr(result, "document", result)
 
-    converter = DocumentConverter()
-    conversion = converter.convert(str(pdf_path))
-    document = getattr(conversion, "document", conversion)
-
-    page_texts = _try_docling_pages(document)
-    if page_texts:
-        return page_texts
-
-    full_text = _try_docling_full_text(document)
-    if full_text.strip():
-        return [full_text]
-
-    return [""]
-
-
-def _try_docling_pages(document: Any) -> list[str]:
-    pages = getattr(document, "pages", None)
-    if pages is None:
-        return []
-
-    if isinstance(pages, dict):
-        values = [pages[key] for key in sorted(pages.keys())]
-    elif isinstance(pages, list):
-        values = pages
-    else:
-        return []
-
-    page_texts: list[str] = []
-    for page in values:
-        page_text = _extract_page_text(page)
-        page_texts.append(page_text)
+    page_texts = _extract_page_texts(document)
+    if not page_texts:
+        logger.warning("Docling returned no page content for %s", pdf_path.name)
+        return [""]
     return page_texts
 
 
-def _extract_page_text(page: Any) -> str:
-    for attr in ("text", "raw_text", "markdown"):
-        value = getattr(page, attr, None)
-        if isinstance(value, str):
-            return value
+def _extract_page_texts(document: Any) -> list[str]:
+    pages = getattr(document, "pages", None)
+    if pages is None:
+        full_text = _export_text(document).strip()
+        return [full_text] if full_text else []
+
+    if isinstance(pages, dict):
+        ordered_pages = [pages[key] for key in sorted(pages.keys())]
+    elif isinstance(pages, list):
+        ordered_pages = pages
+    else:
+        full_text = _export_text(document).strip()
+        return [full_text] if full_text else []
+
+    texts: list[str] = []
+    for page in ordered_pages:
+        text = _export_text(page).strip()
+        texts.append(text)
+    return texts
+
+
+def _export_text(node: Any) -> str:
     for method_name in ("export_to_text", "to_text", "export_to_markdown"):
-        method = getattr(page, method_name, None)
+        method = getattr(node, method_name, None)
         if callable(method):
             value = method()
             if isinstance(value, str):
                 return value
-    return str(page) if page is not None else ""
-
-
-def _try_docling_full_text(document: Any) -> str:
-    for method_name in ("export_to_text", "to_text", "export_to_markdown"):
-        method = getattr(document, method_name, None)
-        if callable(method):
-            value = method()
-            if isinstance(value, str):
-                return value
-    for attr in ("text", "markdown"):
-        value = getattr(document, attr, None)
+    for attr_name in ("text", "markdown"):
+        value = getattr(node, attr_name, None)
         if isinstance(value, str):
             return value
-    return ""
+    return str(node) if node is not None else ""
