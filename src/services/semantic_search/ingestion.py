@@ -427,7 +427,7 @@ class IngestionService:
                 "source_file": str(pdf_path),
                 "source_filename": pdf_path.name,
                 "parser_backend": "docling",
-                "parser_model": "ibm-granite/granite-docling-258M",
+                "parser_mode": "standard_pdf",
             }
         )
         source_fingerprint = self._build_source_fingerprint(pdf_path, sidecar_metadata)

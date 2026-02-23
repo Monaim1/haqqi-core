@@ -1,58 +1,50 @@
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 from typing import Any
-
-_EXPECTED_MODEL_REPO = "ibm-granite/granite-docling-258M"
-
 
 def extract_pdf_page_texts(pdf_path: Path, logger: logging.Logger) -> list[str]:
     try:
         from docling.datamodel.base_models import InputFormat
-        from docling.datamodel.pipeline_options import VlmPipelineOptions
+        from docling.datamodel.accelerator_options import AcceleratorDevice, AcceleratorOptions
+        from docling.datamodel.pipeline_options import PdfPipelineOptions
         from docling.document_converter import DocumentConverter, PdfFormatOption
-        from docling.pipeline.vlm_pipeline import VlmPipeline
     except Exception as exc:  # noqa: BLE001
         raise RuntimeError(
             "Docling is required for PDF parsing. Install project dependencies with `uv sync`."
         ) from exc
 
-    options = VlmPipelineOptions()
-    model_spec = getattr(getattr(options, "vlm_options", None), "model_spec", None)
-    default_repo_id = getattr(model_spec, "default_repo_id", None)
-    if default_repo_id != _EXPECTED_MODEL_REPO:
-        raise RuntimeError(
-            f"Unexpected Docling model preset: {default_repo_id!r}. Expected {_EXPECTED_MODEL_REPO!r}."
-        )
-
-    # This project only extracts text; table/layout-heavy processing is intentionally disabled.
-    if hasattr(options, "do_table_structure"):
-        setattr(options, "do_table_structure", False)
-    if hasattr(options, "do_cell_matching"):
-        setattr(options, "do_cell_matching", False)
-    if hasattr(options, "do_picture_classification"):
-        setattr(options, "do_picture_classification", False)
-    if hasattr(options, "do_picture_description"):
-        setattr(options, "do_picture_description", False)
-
-    converter = DocumentConverter(
-        format_options={
-            InputFormat.PDF: PdfFormatOption(
-                pipeline_cls=VlmPipeline,
-                pipeline_options=options,
-            )
-        }
+    options = PdfPipelineOptions(
+        do_table_structure=False,
+        do_picture_classification=False,
+        do_picture_description=False,
+        do_chart_extraction=False,
+        do_code_enrichment=False,
+        do_formula_enrichment=False,
+        do_ocr=True,
+        force_backend_text=True,
+        generate_page_images=False,
+        generate_picture_images=False,
+        generate_table_images=False,
+        generate_parsed_pages=False,
     )
+
+    options.accelerator_options = AcceleratorOptions(
+        device=AcceleratorDevice.AUTO,
+        num_threads=max(1, os.cpu_count() or 1),
+    )
+
+    converter = DocumentConverter(format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=options)})
     try:
         result = converter.convert(str(pdf_path))
     except Exception as exc:  # noqa: BLE001
         message = str(exc)
         if "huggingface.co" in message or "snapshot folder" in message or "LocalEntryNotFoundError" in message:
             raise RuntimeError(
-                "Docling Granite model is not available locally. "
-                "Connect to the internet once to download "
-                "'ibm-granite/granite-docling-258M', then retry ingestion."
+                "Docling models are not available locally. "
+                "Connect to the internet once to download Docling layout/OCR models, then retry ingestion."
             ) from exc
         raise
     document = getattr(result, "document", result)

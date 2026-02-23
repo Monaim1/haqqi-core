@@ -5,7 +5,7 @@ Standalone open-source pipeline for legal-document retrieval:
 - Qdrant vector store
 - FastEmbed dense + sparse retrieval
 - Optional ColBERT late-interaction reranking
-- Docling PDF parsing with Granite Docling 258M (single parser path)
+- Docling PDF parsing (standard pipeline, no VLM)
 
 ## Quickstart (5 minutes)
 
@@ -93,9 +93,10 @@ Override source directory at runtime:
 HAQQI_CORE_SOURCE_DIR=/path/to/your/pdfs uv run haqqi ingest --limit 10
 ```
 
-PDF parsing is fixed to Docling + `ibm-granite/granite-docling-258M`.
+PDF parsing is fixed to Docling standard PDF pipeline (no VLM model download).
 No table extraction pipeline is enabled in this project.
-The first ingestion run downloads Granite model artifacts from Hugging Face.
+For speed on legal PDFs, ingestion uses backend text extraction first and OCR when needed.
+The first run downloads Docling layout/OCR models from Hugging Face.
 
 ## Common Pitfalls
 
@@ -108,9 +109,12 @@ The first ingestion run downloads Granite model artifacts from Hugging Face.
 - ColBERT fallback warning:
   - Cause: ColBERT collection not ingested yet.
   - Fix: run ingestion without `--no-colbert`.
-- Docling Granite download error:
-  - Cause: model artifacts were not downloaded yet and the machine is offline.
-  - Fix: run ingestion once with internet access to cache `ibm-granite/granite-docling-258M`.
+- Docling OCR is slower on scanned pages:
+  - Cause: scanned pages require OCR, which is compute-heavy.
+  - Fix: ingest in small batches (`--limit`) and keep `--no-colbert` for smoke tests.
+- Docling model download error:
+  - Cause: Docling model files are not cached yet and the machine is offline.
+  - Fix: run one ingestion with internet access, then retry offline runs.
 
 ## Layout
 
