@@ -26,12 +26,16 @@ class ExportRecord:
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Generate Hugging Face upload metadata for PDF datasets")
-    parser.add_argument("--source-dir", default="data/bo/fr", help="Directory containing PDF files and JSON sidecars")
+    parser.add_argument(
+        "--source-dir",
+        default="data/raw-bulletin-officiel",
+        help="Directory containing PDF files and JSON sidecars",
+    )
     parser.add_argument("--glob", default="*.pdf", help="Glob pattern inside source-dir")
     parser.add_argument("--output-dir", default="hf_export", help="Output directory for metadata artifacts")
     parser.add_argument(
         "--repo-data-dir",
-        default="data/bo/fr",
+        default="data/raw-bulletin-officiel",
         help="Destination folder inside the Hugging Face dataset repo",
     )
     parser.add_argument("--repo-id", default="", help="Optional dataset repo id for README hints")

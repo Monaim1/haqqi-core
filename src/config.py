@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     api_prefix: str = "/api/v1"
     log_level: str = "INFO"
 
-    source_dir: str = "data/bo/fr"
+    source_dir: str = "data/raw-bulletin-officiel"
     source_glob_pattern: str = "**/*.pdf"
 
     qdrant_path: str = "data/qdrant"

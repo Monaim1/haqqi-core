@@ -50,9 +50,9 @@ Generate upload metadata for PDF + sidecar files:
 ```bash
 cd haqqi-core
 uv run python -m src.hf_export \
-  --source-dir ../data/bo/fr \
+  --source-dir data/raw-bulletin-officiel \
   --output-dir ./hf_export \
-  --repo-data-dir data/bo/fr \
+  --repo-data-dir data/raw-bulletin-officiel \
   --repo-id your-org/your-dataset
 ```
 
@@ -62,13 +62,12 @@ This writes:
 - `hf_export/upload_manifest.json`
 - `hf_export/README.md`
 
-## Monorepo Dry Run Against Existing Dataset
+## Local Dataset Dry Run
 
-If you run from `haqqi-core` but want to ingest data from the monorepo dataset folder:
+By default, ingestion reads from `data/raw-bulletin-officiel`:
 
 ```bash
 cd haqqi-core
-HAQQI_CORE_SOURCE_DIR=../data/bo/fr uv run python -m src.cli ingest --limit 1
+uv run python -m src.cli ingest --limit 1
 ```
-
-This is the recommended smoke test before pushing the dataset to Hugging Face.
+To override source data at runtime, set `HAQQI_CORE_SOURCE_DIR=/path/to/your/folder`.

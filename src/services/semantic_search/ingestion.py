@@ -604,6 +604,7 @@ class IngestionService:
         base_metadata = self._sanitize_metadata(
             {
                 **sidecar_metadata,
+                "file_path": str(pdf_path),
                 "source_file": str(pdf_path),
                 "source_filename": pdf_path.name,
             }
