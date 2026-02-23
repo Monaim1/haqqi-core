@@ -13,9 +13,9 @@ import uuid
 
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
-from pypdf import PdfReader
 
 from src.config import Settings
+from src.services.semantic_search.pdf_parser import extract_pdf_page_texts
 
 _PUNCTUATION_SPLIT_RE = re.compile(r"[.;:!?]\s")
 
@@ -599,7 +599,11 @@ class IngestionService:
         return report
 
     def _extract_records(self, pdf_path: Path) -> tuple[list[ChunkRecord], DocumentIngestionStats]:
-        reader = PdfReader(str(pdf_path))
+        page_texts = extract_pdf_page_texts(
+            pdf_path=pdf_path,
+            backend=self._settings.pdf_parser_backend,
+            logger=self._logger,
+        )
         sidecar_metadata = self._load_sidecar_metadata(pdf_path)
         base_metadata = self._sanitize_metadata(
             {
@@ -617,8 +621,7 @@ class IngestionService:
         pages_skipped_toc = 0
         pages_skipped_boilerplate = 0
         segments_indexed = 0
-        for page_idx, page in enumerate(reader.pages, start=1):
-            raw_text = page.extract_text() or ""
+        for page_idx, raw_text in enumerate(page_texts, start=1):
             parsed_page = self._page_parser.parse_page(raw_text)
             if not parsed_page.segments and not parsed_page.skipped_toc and not parsed_page.skipped_boilerplate:
                 pages_without_extractable_text += 1
@@ -671,7 +674,7 @@ class IngestionService:
         return records, DocumentIngestionStats(
             source_file=str(pdf_path),
             source_filename=pdf_path.name,
-            pages_total=len(reader.pages),
+            pages_total=len(page_texts),
             pages_without_extractable_text=pages_without_extractable_text,
             pages_indexed=pages_indexed,
             pages_skipped_toc=pages_skipped_toc,

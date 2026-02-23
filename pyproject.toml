@@ -14,10 +14,23 @@ dependencies = [
   "sentence-transformers>=2.2",
 ]
 
+[build-system]
+requires = ["hatchling>=1.24.2"]
+build-backend = "hatchling.build"
+
 [project.scripts]
+haqqi = "src.cli:main"
+haqqi-api = "src.main:run"
+haqqi-export = "src.hf_export:main"
 haqqi-core-api = "src.main:run"
 haqqi-core-ingest = "src.cli:main"
 haqqi-core-hf-export = "src.hf_export:main"
+
+[tool.uv]
+package = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
 
 [tool.ruff]
 line-length = 110

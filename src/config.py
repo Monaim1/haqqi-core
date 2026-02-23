@@ -20,6 +20,7 @@ class Settings(BaseSettings):
 
     source_dir: str = "data/raw-bulletin-officiel"
     source_glob_pattern: str = "**/*.pdf"
+    pdf_parser_backend: str = "auto"
 
     qdrant_path: str = "data/qdrant"
     qdrant_url: str = ""
@@ -50,6 +51,17 @@ class Settings(BaseSettings):
         allowed = {"none", "late_interaction"}
         if normalized not in allowed:
             raise ValueError(f"retrieval_reranker_mode must be one of {sorted(allowed)}")
+        return normalized
+
+    @field_validator("pdf_parser_backend", mode="before")
+    @classmethod
+    def parse_pdf_parser_backend(cls, value: object) -> object:
+        if not isinstance(value, str):
+            return value
+        normalized = value.strip().lower()
+        allowed = {"auto", "pypdf", "docling"}
+        if normalized not in allowed:
+            raise ValueError(f"pdf_parser_backend must be one of {sorted(allowed)}")
         return normalized
 
 

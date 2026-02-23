@@ -24,7 +24,7 @@ class ExportRecord:
     sidecar_path: str
 
 
-def _parse_args() -> argparse.Namespace:
+def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Generate Hugging Face upload metadata for PDF datasets")
     parser.add_argument(
         "--source-dir",
@@ -47,7 +47,7 @@ def _parse_args() -> argparse.Namespace:
         default="sidecar",
         help="Use sidecar checksum, compute file checksum, or leave empty",
     )
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
 def _file_sha256(path: Path) -> str:
@@ -185,8 +185,8 @@ def _write_readme(path: Path, repo_id: str, source_dir: Path, records: list[Expo
     path.write_text(text, encoding="utf-8")
 
 
-def main() -> int:
-    args = _parse_args()
+def main(argv: list[str] | None = None) -> int:
+    args = _parse_args(argv)
     source_dir = Path(args.source_dir).expanduser().resolve()
     output_dir = Path(args.output_dir).expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
