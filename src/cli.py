@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from dataclasses import asdict
 
 import uvicorn
 
 from src import hf_export
+from src import index_fetch
 from src.services.semantic_search import SemanticSearchService
 from src.services.semantic_search.ingestion import IngestionProgressEvent
 
@@ -31,6 +33,35 @@ def _build_parser() -> argparse.ArgumentParser:
     api_parser.add_argument("--host", default="0.0.0.0", help="Bind host")
     api_parser.add_argument("--port", type=int, default=8000, help="Bind port")
     api_parser.add_argument("--no-reload", action="store_true", help="Disable auto-reload")
+
+    fetch_parser = subparsers.add_parser("fetch", help="Download PDFs listed in data/index.json")
+    fetch_parser.add_argument("--index-file", default="data/index.json", help="Path to index JSON file")
+    fetch_parser.add_argument(
+        "--source-dir",
+        default="data/raw-bulletin-officiel",
+        help="Output PDF directory",
+    )
+    fetch_parser.add_argument("--limit", type=int, default=None, help="Limit number of entries")
+    fetch_parser.add_argument(
+        "--language",
+        action="append",
+        default=[],
+        help="Filter by language code (repeatable, e.g. --language fr --language ar)",
+    )
+    fetch_parser.add_argument("--since", default=None, help="Filter publication_date >= YYYY-MM-DD")
+    fetch_parser.add_argument("--until", default=None, help="Filter publication_date <= YYYY-MM-DD")
+    fetch_parser.add_argument(
+        "--include-downloaded",
+        action="store_true",
+        help="Include entries already marked downloaded in index file",
+    )
+    fetch_parser.add_argument("--dry-run", action="store_true", help="Print planned downloads only")
+    fetch_parser.add_argument(
+        "--state-out",
+        default="",
+        help="Optional path to write updated index state JSON",
+    )
+    fetch_parser.add_argument("--timeout", type=int, default=45, help="HTTP timeout per file in seconds")
 
     export_parser = subparsers.add_parser("export", help="Generate Hugging Face metadata bundle")
     export_parser.add_argument("--source-dir", default="data/raw-bulletin-officiel")
@@ -65,8 +96,20 @@ def _print_progress(event: IngestionProgressEvent) -> None:
 
 def _run_ingest(limit: int | None, include_colbert: bool) -> int:
     service = SemanticSearchService()
-    dense = service.ingest_dense(limit=limit, progress_callback=_print_progress)
-    colbert = service.ingest_colbert(limit=limit, progress_callback=_print_progress) if include_colbert else None
+    try:
+        dense = service.ingest_dense(limit=limit, progress_callback=_print_progress)
+        if include_colbert:
+            colbert = service.ingest_colbert(limit=limit, progress_callback=_print_progress)
+        else:
+            colbert = None
+    except FileNotFoundError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        print(
+            "Hint: create your source folder and add PDFs, "
+            "or run `uv run haqqi fetch --limit 5` first.",
+            file=sys.stderr,
+        )
+        return 2
 
     payload = {
         "dense": asdict(dense),
@@ -110,6 +153,33 @@ def _run_export(args: argparse.Namespace) -> int:
     return hf_export.main(export_argv)
 
 
+def _run_fetch(args: argparse.Namespace) -> int:
+    fetch_argv = [
+        "--index-file",
+        args.index_file,
+        "--source-dir",
+        args.source_dir,
+        "--timeout",
+        str(args.timeout),
+    ]
+    if args.limit is not None:
+        fetch_argv.extend(["--limit", str(args.limit)])
+    if args.since is not None:
+        fetch_argv.extend(["--since", args.since])
+    if args.until is not None:
+        fetch_argv.extend(["--until", args.until])
+    if args.include_downloaded:
+        fetch_argv.append("--include-downloaded")
+    if args.dry_run:
+        fetch_argv.append("--dry-run")
+    if args.state_out.strip():
+        fetch_argv.extend(["--state-out", args.state_out])
+    for language in args.language:
+        fetch_argv.extend(["--language", language])
+
+    return index_fetch.main(fetch_argv)
+
+
 def main() -> int:
     parser = _build_parser()
     args = parser.parse_args()
@@ -120,6 +190,8 @@ def main() -> int:
         return _run_query(query=args.q, top_k=args.top_k)
     if args.command == "api":
         return _run_api(host=args.host, port=args.port, reload_enabled=not args.no_reload)
+    if args.command == "fetch":
+        return _run_fetch(args)
     if args.command == "export":
         return _run_export(args)
 

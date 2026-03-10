@@ -1,15 +1,21 @@
 # Haqqi Core
 
-Standalone open-source pipeline for legal-document retrieval:
+Retrieval backend for a legal AI assistant:
 - FastAPI API
-- Qdrant vector store
-- FastEmbed dense + sparse retrieval
+- Qdrant vector store (local path or remote URL)
+- FastEmbed dense retrieval + sparse vectors
 - Optional ColBERT late-interaction reranking
-- Docling PDF parsing (standard pipeline, no VLM)
+- Docling PDF parsing
 
-## Quickstart (5 minutes)
+This repo is focused on retrieval only (ingest + search), so you can plug it behind a chatbot or agent layer.
 
-### 1) Install and configure
+## Quickstart (10 minutes)
+
+### 1) Install
+
+Requirements:
+- Python 3.11+
+- [uv](https://docs.astral.sh/uv/)
 
 ```bash
 git clone <your-repo-url>
@@ -18,37 +24,53 @@ uv sync
 cp .env.example .env
 ```
 
-### 2) Put your source documents in the data folder
+### 2) Fetch PDFs from `data/index.json` (recommended)
 
-Default source path:
+`data/index.json` contains source metadata and `pdf_url` links.  
+Use the built-in fetcher to download files and generate sidecar metadata:
 
-`data/raw-bulletin-officiel`
+```bash
+# Preview what would be downloaded
+uv run haqqi fetch --limit 3 --language fr --dry-run
 
-Expected files:
+# Download recent FR files (example)
+uv run haqqi fetch --limit 20 --language fr --since 2024-01-01
+```
+
+Files are written to `data/raw-bulletin-officiel` by default as:
 - `*.pdf`
-- optional sidecars `*.json` with metadata (`issue_number`, `publication_date`, `language`, etc.)
+- matching `*.json` sidecars with:
+  `issue_number`, `publication_date`, `language`, `pdf_url`, `checksum`, `file_path`
 
-### 3) Run ingestion
+Optional: write an updated state file after downloads:
+
+```bash
+uv run haqqi fetch --limit 20 --state-out data/index.state.json
+```
+
+If you already have PDFs, copy them into `data/raw-bulletin-officiel` (or set `HAQQI_CORE_SOURCE_DIR`).
+
+### 3) Build the vector database
 
 Dense + ColBERT:
 
 ```bash
-uv run haqqi ingest --limit 5
+uv run haqqi ingest --limit 20
 ```
 
 Dense only (faster smoke test):
 
 ```bash
-uv run haqqi ingest --limit 1 --no-colbert
+uv run haqqi ingest --limit 3 --no-colbert
 ```
 
-### 4) Run a query
+### 4) Retrieve
 
 ```bash
 uv run haqqi query "loi sur la gouvernance des établissements publics" --top-k 5
 ```
 
-For better results, prefer sentence-style queries over one-word queries.
+For better relevance, use sentence-like queries (not one-word queries like `loi`).
 
 ### 5) Run the API
 
@@ -56,13 +78,13 @@ For better results, prefer sentence-style queries over one-word queries.
 uv run haqqi api
 ```
 
-Health check:
+Health:
 
 ```bash
 curl http://127.0.0.1:8000/api/v1/health
 ```
 
-Ingest via API:
+Ingest:
 
 ```bash
 curl -X POST http://127.0.0.1:8000/api/v1/ingest \
@@ -70,7 +92,7 @@ curl -X POST http://127.0.0.1:8000/api/v1/ingest \
   -d '{"limit": 1, "include_colbert": true}'
 ```
 
-Query via API:
+Query:
 
 ```bash
 curl -X POST http://127.0.0.1:8000/api/v1/query \
@@ -78,62 +100,73 @@ curl -X POST http://127.0.0.1:8000/api/v1/query \
   -d '{"query":"loi sur les établissements publics","top_k":5}'
 ```
 
+## CLI Commands
+
+```bash
+uv run haqqi --help
+```
+
+Main commands:
+- `haqqi fetch`: Download PDFs from `index.json`
+- `haqqi ingest`: Parse PDFs and index vectors in Qdrant
+- `haqqi query` / `haqqi search`: Run retrieval
+- `haqqi api`: Start FastAPI server
+- `haqqi export`: Generate Hugging Face metadata bundle
+
 ## Configuration
 
 Main env vars:
 - `HAQQI_CORE_SOURCE_DIR` default: `data/raw-bulletin-officiel`
 - `HAQQI_CORE_SOURCE_GLOB_PATTERN` default: `**/*.pdf`
 - `HAQQI_CORE_QDRANT_PATH` default: `data/qdrant`
+- `HAQQI_CORE_QDRANT_URL` default: empty (when set, remote Qdrant is used)
 - `HAQQI_CORE_QDRANT_COLLECTION_NAME` default: `moroccan_law`
 - `HAQQI_CORE_RETRIEVAL_RERANKER_MODE` default: `late_interaction` (`none` or `late_interaction`)
 
-Override source directory at runtime:
+Runtime override example:
 
 ```bash
 HAQQI_CORE_SOURCE_DIR=/path/to/your/pdfs uv run haqqi ingest --limit 10
 ```
 
-PDF parsing is fixed to Docling standard PDF pipeline (no VLM model download).
-No table extraction pipeline is enabled in this project.
-For speed on legal PDFs, ingestion uses backend text extraction first and OCR when needed.
-The first run downloads Docling layout/OCR models from Hugging Face.
+Notes:
+- Docling models are downloaded on first use.
+- If the machine is offline and models are not cached yet, ingestion will fail.
 
 ## Common Pitfalls
 
-- Query returns short chunks (`"* * *"`, headers, very short fragments):
-  - Cause: OCR/segmentation noise + very broad query.
-  - Fix: re-ingest after parser/chunking improvements and use richer queries (4-10 words).
-- Query has low relevance with one-word input like `"loi"`:
-  - Cause: too broad semantically; many legal headings match.
-  - Fix: include intent and scope, e.g. `"loi sur la fiscalité des entreprises publiques"`.
+- `source_dir does not exist` on ingest:
+  - Run `uv run haqqi fetch --limit 5` or create/populate `data/raw-bulletin-officiel`.
+- Query returns empty hits:
+  - Ingestion has not run yet or collection is empty.
 - ColBERT fallback warning:
-  - Cause: ColBERT collection not ingested yet.
-  - Fix: run ingestion without `--no-colbert`.
-- Docling OCR is slower on scanned pages:
-  - Cause: scanned pages require OCR, which is compute-heavy.
-  - Fix: ingest in small batches (`--limit`) and keep `--no-colbert` for smoke tests.
-- Docling model download error:
-  - Cause: Docling model files are not cached yet and the machine is offline.
-  - Fix: run one ingestion with internet access, then retry offline runs.
+  - ColBERT collection has not been ingested yet; run ingest without `--no-colbert`.
+- Broad queries are noisy:
+  - Prefer specific queries like `loi sur la fiscalité des entreprises publiques`.
 
-## Layout
+## Open-Source Smoke Test
+
+Before publishing, these commands should all work:
+
+```bash
+uv run haqqi --help
+uv run haqqi fetch --limit 2 --dry-run
+uv run haqqi ingest --limit 1 --no-colbert
+uv run haqqi query "loi sur la fiscalité" --top-k 3
+```
+
+## Project Layout
 
 - `src/config.py`: settings
 - `src/schemas.py`: API schemas
-- `src/main.py`: FastAPI app entrypoint
-- `src/api/routes.py`: `/query` and `/ingest` routes
+- `src/main.py`: FastAPI app
+- `src/api/routes.py`: `/query`, `/ingest`, `/health`
 - `src/services/semantic_search/*`: ingestion + retrieval services
-- `src/cli.py`: CLI (`haqqi ingest|query|api|export`)
-- `src/hf_export.py`: Hugging Face metadata/export helper
-
-API endpoints:
-- `POST /api/v1/query`
-- `POST /api/v1/ingest`
-- `GET /api/v1/health`
+- `src/cli.py`: CLI entrypoint
+- `src/index_fetch.py`: `index.json` downloader
+- `src/hf_export.py`: Hugging Face export helper
 
 ## Hugging Face Metadata Export
-
-Generate upload metadata for PDF + sidecar files:
 
 ```bash
 uv run haqqi export \
@@ -143,7 +176,7 @@ uv run haqqi export \
   --repo-id your-org/your-dataset
 ```
 
-This writes:
+Writes:
 - `hf_export/metadata.csv`
 - `hf_export/metadata.jsonl`
 - `hf_export/upload_manifest.json`
