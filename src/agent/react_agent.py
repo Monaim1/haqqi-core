@@ -68,16 +68,17 @@ class GroundedRetrievalAgent:
                     "tool_calls": 0,
                     "last_query": "",
                     "last_hits": [],
+                    "last_draft": "",
                     "last_ingestion_report": None,
                 }
             return self._session_state[thread]
 
         @tool
-        def retrieve_context(query: str, top_k: int | None = None) -> str:
+        def search_law(query: str, top_k: int | None = None) -> str:
             """Search the vector database and return grounded snippets with source metadata."""
             thread = self._active_thread_id or "default"
-            if not self._middleware.before_tool_call(thread_id=thread, tool_name="retrieve_context"):
-                self._middleware.register_pending(thread_id=thread, tool_name="retrieve_context")
+            if not self._middleware.before_tool_call(thread_id=thread, tool_name="search_law"):
+                self._middleware.register_pending(thread_id=thread, tool_name="search_law")
                 return "Tool call blocked by middleware placeholder (human approval required)."
             state = _state_for_current_thread()
             response = self._service.search(query=query, top_k=top_k)
@@ -98,6 +99,29 @@ class GroundedRetrievalAgent:
                     f"source={source} page={page}\n{hit.text}"
                 )
             return "\n\n".join(lines)
+
+        @tool
+        def draft_document(topic: str, legal_context: str) -> str:
+            """Create a legal draft from a topic and grounded legal context snippets."""
+            thread = self._active_thread_id or "default"
+            if not self._middleware.before_tool_call(thread_id=thread, tool_name="draft_document"):
+                self._middleware.register_pending(thread_id=thread, tool_name="draft_document")
+                return "Tool call blocked by middleware placeholder (human approval required)."
+            state = _state_for_current_thread()
+            state["tool_calls"] += 1
+            draft = (
+                f"## Projet - {topic}\n\n"
+                "### Objet\n"
+                f"{topic}\n\n"
+                "### Base juridique (extraits)\n"
+                f"{legal_context.strip()}\n\n"
+                "### Analyse\n"
+                "A adapter selon votre cas. Verifiez les textes applicables et la date de publication.\n\n"
+                "### Avertissement\n"
+                "Ce contenu est informatif et ne remplace pas l'avis d'un avocat."
+            )
+            state["last_draft"] = draft
+            return draft
 
         @tool
         def run_ingestion(
@@ -157,6 +181,7 @@ class GroundedRetrievalAgent:
                 "tool_calls": 0,
                 "last_query": "",
                 "last_hits": [],
+                "last_draft": "",
                 "last_ingestion_report": None,
             }
             self._middleware.clear_thread(thread)
@@ -165,7 +190,7 @@ class GroundedRetrievalAgent:
         checkpointer = MemorySaver()
         return create_react_agent(
             model=model,
-            tools=[retrieve_context, run_ingestion, get_session_state, clear_session_state],
+            tools=[search_law, draft_document, run_ingestion, get_session_state, clear_session_state],
             prompt=GROUNDED_REACT_SYSTEM_PROMPT,
             checkpointer=checkpointer,
         )

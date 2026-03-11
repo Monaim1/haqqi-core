@@ -196,7 +196,7 @@ uv run haqqi agent --thread-id demo
 Notes:
 - `--thread-id` keeps memory/state for that session.
 - `--recursion-limit` maps to LangGraph recursion limit (tool-call loop bound).
-- Agent tools available: `retrieve_context`, `run_ingestion`, `get_session_state`, `clear_session_state`.
+- Agent tools available: `search_law`, `draft_document`, `run_ingestion`, `get_session_state`, `clear_session_state`.
 - System prompt is separated in `src/agent/prompts.py`.
 - A placeholder HITL middleware is wired in `src/agent/middleware.py` (currently allow-all + tool-call counting).
 - The agent is instructed to cite retrieved evidence (`[1]`, `[2]`, ...).
