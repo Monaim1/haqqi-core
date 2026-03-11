@@ -11,6 +11,34 @@ This repo contains the retrieval pipeline (ingest + search) and a small LangGrap
 
 ## Quickstart (10 minutes)
 
+## Agent Fast Kickstart (Copy/Paste)
+
+```bash
+# 1) Clone + install
+git clone <your-repo-url>
+cd haqqi-core
+uv sync
+
+# 2) Configure env
+cp .env.example .env
+# Edit .env and set:
+# GOOGLE_API_KEY=your_key_here
+
+# 3) Fetch a few sample PDFs (quick demo set)
+uv run haqqi fetch --limit 5 --language fr
+
+# 4) Build the index
+uv run haqqi ingest --limit 5
+
+# 5) Start the agent and chat
+uv run haqqi agent --thread-id demo --recursion-limit 25
+```
+
+Example prompts to test:
+- `Salam, chno kayn?`
+- `Quelle est la règle sur les établissements publics ? Cite les sources.`
+- `Fais-moi un draft de mémo sur ce sujet.`
+
 ### 1) Install
 
 Requirements:
