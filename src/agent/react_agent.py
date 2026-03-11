@@ -6,8 +6,6 @@ from collections.abc import Callable
 from dataclasses import asdict
 from typing import Any
 
-from langchain_core.runnables import RunnableConfig
-
 from src.config import Settings
 from src.services.semantic_search import SemanticSearchService
 from src.services.semantic_search.ingestion import IngestionProgressEvent
@@ -36,6 +34,7 @@ class GroundedRetrievalAgent:
         self._settings = settings or Settings()
         self._service = SemanticSearchService()
         self._session_state: dict[str, dict[str, Any]] = {}
+        self._active_thread_id = "default"
         self._app = self._build_graph()
 
     def _build_graph(self):
@@ -59,15 +58,8 @@ class GroundedRetrievalAgent:
             temperature=0,
         )
 
-        def _thread_id(config: RunnableConfig | None) -> str:
-            if config and isinstance(config.get("configurable"), dict):
-                thread = config["configurable"].get("thread_id")
-                if isinstance(thread, str) and thread.strip():
-                    return thread.strip()
-            return "default"
-
-        def _state_for(config: RunnableConfig | None) -> dict[str, Any]:
-            thread = _thread_id(config)
+        def _state_for_current_thread() -> dict[str, Any]:
+            thread = self._active_thread_id or "default"
             if thread not in self._session_state:
                 self._session_state[thread] = {
                     "tool_calls": 0,
@@ -78,9 +70,9 @@ class GroundedRetrievalAgent:
             return self._session_state[thread]
 
         @tool
-        def retrieve_context(query: str, top_k: int | None = None, config: RunnableConfig | None = None) -> str:
+        def retrieve_context(query: str, top_k: int | None = None) -> str:
             """Search the vector database and return grounded snippets with source metadata."""
-            state = _state_for(config)
+            state = _state_for_current_thread()
             response = self._service.search(query=query, top_k=top_k)
             state["tool_calls"] += 1
             state["last_query"] = query
@@ -104,10 +96,9 @@ class GroundedRetrievalAgent:
         def run_ingestion(
             limit: int | None = None,
             include_colbert: bool = True,
-            config: RunnableConfig | None = None,
         ) -> str:
             """Index documents into Qdrant. Use this if retrieval returns no results because collection is empty."""
-            state = _state_for(config)
+            state = _state_for_current_thread()
             progress_events: list[dict[str, Any]] = []
 
             def _progress(event: IngestionProgressEvent) -> None:
@@ -125,15 +116,15 @@ class GroundedRetrievalAgent:
             return json.dumps(payload, ensure_ascii=False)
 
         @tool
-        def get_session_state(config: RunnableConfig | None = None) -> str:
+        def get_session_state() -> str:
             """Return current thread state (last query, last hits, ingestion status)."""
-            state = _state_for(config)
+            state = _state_for_current_thread()
             return json.dumps(state, ensure_ascii=False)
 
         @tool
-        def clear_session_state(config: RunnableConfig | None = None) -> str:
+        def clear_session_state() -> str:
             """Clear this thread's state."""
-            thread = _thread_id(config)
+            thread = self._active_thread_id or "default"
             self._session_state[thread] = {
                 "tool_calls": 0,
                 "last_query": "",
@@ -162,6 +153,7 @@ class GroundedRetrievalAgent:
             if isinstance(recursion_limit, int) and recursion_limit > 0
             else self._settings.agent_recursion_limit
         )
+        self._active_thread_id = thread_id
         result = self._app.invoke(
             {"messages": [("user", message)]},
             config={"configurable": {"thread_id": thread_id}, "recursion_limit": final_limit},
