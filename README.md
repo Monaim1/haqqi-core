@@ -197,6 +197,8 @@ Notes:
 - `--thread-id` keeps memory/state for that session.
 - `--recursion-limit` maps to LangGraph recursion limit (tool-call loop bound).
 - Agent tools available: `retrieve_context`, `run_ingestion`, `get_session_state`, `clear_session_state`.
+- System prompt is separated in `src/agent/prompts.py`.
+- A placeholder HITL middleware is wired in `src/agent/middleware.py` (currently allow-all + tool-call counting).
 - The agent is instructed to cite retrieved evidence (`[1]`, `[2]`, ...).
 
 ## Project Layout
@@ -207,6 +209,8 @@ Notes:
 - `src/api/routes.py`: `/query`, `/ingest`, `/health`
 - `src/services/semantic_search/*`: ingestion + retrieval services
 - `src/agent/react_agent.py`: LangGraph ReAct agent + stateful tools
+- `src/agent/prompts.py`: system prompt definition
+- `src/agent/middleware.py`: placeholder HITL middleware
 - `src/cli.py`: CLI entrypoint
 - `src/index_fetch.py`: `index.json` downloader
 - `src/hf_export.py`: Hugging Face export helper

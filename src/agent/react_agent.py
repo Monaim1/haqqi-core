@@ -7,6 +7,8 @@ from dataclasses import asdict
 from typing import Any
 
 from src.config import Settings
+from src.agent.middleware import HumanInTheLoopMiddleware
+from src.agent.prompts import GROUNDED_REACT_SYSTEM_PROMPT
 from src.services.semantic_search import SemanticSearchService
 from src.services.semantic_search.ingestion import IngestionProgressEvent
 
@@ -33,6 +35,7 @@ class GroundedRetrievalAgent:
     def __init__(self, settings: Settings | None = None):
         self._settings = settings or Settings()
         self._service = SemanticSearchService()
+        self._middleware = HumanInTheLoopMiddleware()
         self._session_state: dict[str, dict[str, Any]] = {}
         self._active_thread_id = "default"
         self._app = self._build_graph()
@@ -72,6 +75,10 @@ class GroundedRetrievalAgent:
         @tool
         def retrieve_context(query: str, top_k: int | None = None) -> str:
             """Search the vector database and return grounded snippets with source metadata."""
+            thread = self._active_thread_id or "default"
+            if not self._middleware.before_tool_call(thread_id=thread, tool_name="retrieve_context"):
+                self._middleware.register_pending(thread_id=thread, tool_name="retrieve_context")
+                return "Tool call blocked by middleware placeholder (human approval required)."
             state = _state_for_current_thread()
             response = self._service.search(query=query, top_k=top_k)
             state["tool_calls"] += 1
@@ -98,6 +105,10 @@ class GroundedRetrievalAgent:
             include_colbert: bool = True,
         ) -> str:
             """Index documents into Qdrant. Use this if retrieval returns no results because collection is empty."""
+            thread = self._active_thread_id or "default"
+            if not self._middleware.before_tool_call(thread_id=thread, tool_name="run_ingestion"):
+                self._middleware.register_pending(thread_id=thread, tool_name="run_ingestion")
+                return "Tool call blocked by middleware placeholder (human approval required)."
             state = _state_for_current_thread()
             progress_events: list[dict[str, Any]] = []
 
@@ -118,32 +129,44 @@ class GroundedRetrievalAgent:
         @tool
         def get_session_state() -> str:
             """Return current thread state (last query, last hits, ingestion status)."""
+            thread = self._active_thread_id or "default"
+            if not self._middleware.before_tool_call(thread_id=thread, tool_name="get_session_state"):
+                self._middleware.register_pending(thread_id=thread, tool_name="get_session_state")
+                return "Tool call blocked by middleware placeholder (human approval required)."
             state = _state_for_current_thread()
-            return json.dumps(state, ensure_ascii=False)
+            return json.dumps(
+                {
+                    **state,
+                    "middleware": {
+                        "enabled": self._middleware.enabled,
+                        "tool_call_count": self._middleware.tool_call_counts.get(thread, 0),
+                        "pending_approvals": self._middleware.pending_approvals.get(thread, []),
+                    },
+                },
+                ensure_ascii=False,
+            )
 
         @tool
         def clear_session_state() -> str:
             """Clear this thread's state."""
             thread = self._active_thread_id or "default"
+            if not self._middleware.before_tool_call(thread_id=thread, tool_name="clear_session_state"):
+                self._middleware.register_pending(thread_id=thread, tool_name="clear_session_state")
+                return "Tool call blocked by middleware placeholder (human approval required)."
             self._session_state[thread] = {
                 "tool_calls": 0,
                 "last_query": "",
                 "last_hits": [],
                 "last_ingestion_report": None,
             }
+            self._middleware.clear_thread(thread)
             return "Session state cleared."
 
-        system_prompt = (
-            "You are a grounded legal retrieval agent. "
-            "Use tools before answering factual/legal questions. "
-            "When you answer, cite retrieved snippets as [1], [2], etc. "
-            "If evidence is missing or weak, say so explicitly and ask for a better query."
-        )
         checkpointer = MemorySaver()
         return create_react_agent(
             model=model,
             tools=[retrieve_context, run_ingestion, get_session_state, clear_session_state],
-            prompt=system_prompt,
+            prompt=GROUNDED_REACT_SYSTEM_PROMPT,
             checkpointer=checkpointer,
         )
 
