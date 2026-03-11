@@ -40,6 +40,8 @@ class Settings(BaseSettings):
     retrieval_colbert_vector_name: str = "colbert"
     retrieval_colbert_batch_size: int = 8
     retrieval_colbert_on_disk_vectors: bool = True
+    agent_model_name: str = "gemini-3-flash-preview"
+    agent_recursion_limit: int = 25
 
     @field_validator("retrieval_reranker_mode", mode="before")
     @classmethod

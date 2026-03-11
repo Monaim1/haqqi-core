@@ -73,6 +73,16 @@ def _build_parser() -> argparse.ArgumentParser:
     export_parser.add_argument("--limit", type=int, default=None)
     export_parser.add_argument("--checksum-mode", choices=["sidecar", "compute", "none"], default="sidecar")
 
+    agent_parser = subparsers.add_parser("agent", help="Run LangGraph ReAct retrieval agent")
+    agent_parser.add_argument("--question", default="", help="Single-turn prompt (non-interactive)")
+    agent_parser.add_argument("--thread-id", default="default", help="Conversation thread id for stateful sessions")
+    agent_parser.add_argument(
+        "--recursion-limit",
+        type=int,
+        default=None,
+        help="LangGraph recursion limit for tool-calling loops",
+    )
+
     return parser
 
 
@@ -180,6 +190,39 @@ def _run_fetch(args: argparse.Namespace) -> int:
     return index_fetch.main(fetch_argv)
 
 
+def _run_agent(args: argparse.Namespace) -> int:
+    try:
+        from src.agent import GroundedRetrievalAgent
+    except Exception as exc:  # noqa: BLE001
+        print(
+            "Error loading agent dependencies. Ensure LangGraph + Gemini dependencies are installed. "
+            "Run `uv sync` after pulling latest changes.",
+            file=sys.stderr,
+        )
+        print(str(exc), file=sys.stderr)
+        return 2
+
+    try:
+        agent = GroundedRetrievalAgent()
+    except Exception as exc:  # noqa: BLE001
+        print(f"Error initializing agent: {exc}", file=sys.stderr)
+        return 2
+
+    if args.question.strip():
+        answer = agent.ask(
+            args.question.strip(),
+            thread_id=args.thread_id,
+            recursion_limit=args.recursion_limit,
+        )
+        print(answer)
+        return 0
+
+    return agent.chat_loop(
+        thread_id=args.thread_id,
+        recursion_limit=args.recursion_limit,
+    )
+
+
 def main() -> int:
     parser = _build_parser()
     args = parser.parse_args()
@@ -194,6 +237,8 @@ def main() -> int:
         return _run_fetch(args)
     if args.command == "export":
         return _run_export(args)
+    if args.command == "agent":
+        return _run_agent(args)
 
     parser.error(f"Unknown command: {args.command}")
     return 2

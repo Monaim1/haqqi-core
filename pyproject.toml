@@ -12,6 +12,8 @@ dependencies = [
   "qdrant-client[fastembed]>=1.17.0",
   "docling>=2.0.0",
   "sentence-transformers>=2.2",
+  "langgraph>=0.2.56",
+  "langchain-google-genai>=2.0.6",
 ]
 
 [build-system]

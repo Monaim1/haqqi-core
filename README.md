@@ -7,7 +7,7 @@ Retrieval backend for a legal AI assistant:
 - Optional ColBERT late-interaction reranking
 - Docling PDF parsing
 
-This repo is focused on retrieval only (ingest + search), so you can plug it behind a chatbot or agent layer.
+This repo contains the retrieval pipeline (ingest + search) and a small LangGraph ReAct agent that uses retrieval tools for grounded answers.
 
 ## Quickstart (10 minutes)
 
@@ -22,6 +22,12 @@ git clone <your-repo-url>
 cd haqqi-core
 uv sync
 cp .env.example .env
+```
+
+If you plan to use the agent, set your Gemini key in `.env`:
+
+```bash
+GOOGLE_API_KEY=your_key_here
 ```
 
 ### 2) Fetch PDFs from `data/index.json` (recommended)
@@ -110,6 +116,7 @@ Main commands:
 - `haqqi fetch`: Download PDFs from `index.json`
 - `haqqi ingest`: Parse PDFs and index vectors in Qdrant
 - `haqqi query` / `haqqi search`: Run retrieval
+- `haqqi agent`: Run LangGraph ReAct agent over retrieval tools
 - `haqqi api`: Start FastAPI server
 - `haqqi export`: Generate Hugging Face metadata bundle
 
@@ -122,6 +129,9 @@ Main env vars:
 - `HAQQI_CORE_QDRANT_URL` default: empty (when set, remote Qdrant is used)
 - `HAQQI_CORE_QDRANT_COLLECTION_NAME` default: `moroccan_law`
 - `HAQQI_CORE_RETRIEVAL_RERANKER_MODE` default: `late_interaction` (`none` or `late_interaction`)
+- `GOOGLE_API_KEY` required for `haqqi agent`
+- `HAQQI_CORE_AGENT_MODEL_NAME` default: `gemini-2.0-flash`
+- `HAQQI_CORE_AGENT_RECURSION_LIMIT` default: `25`
 
 Runtime override example:
 
@@ -153,7 +163,41 @@ uv run haqqi --help
 uv run haqqi fetch --limit 2 --dry-run
 uv run haqqi ingest --limit 1 --no-colbert
 uv run haqqi query "loi sur la fiscalité" --top-k 3
+# requires GOOGLE_API_KEY
+uv run haqqi agent --question "Résume le sujet du document" --thread-id smoke --recursion-limit 10
 ```
+
+## LangGraph Agent (Grounded ReAct)
+
+The repository now includes a simple **LangGraph ReAct agent** that can:
+- retrieve grounded snippets from the indexed legal corpus,
+- trigger ingestion when needed,
+- keep thread-level state across turns.
+- recurse through tool calls up to a configurable recursion limit.
+
+Set your Gemini API key:
+
+```bash
+export GOOGLE_API_KEY="your_key"
+```
+
+Single-turn:
+
+```bash
+uv run haqqi agent --question "Quelle est la règle sur ... ?" --thread-id demo --recursion-limit 25
+```
+
+Interactive:
+
+```bash
+uv run haqqi agent --thread-id demo
+```
+
+Notes:
+- `--thread-id` keeps memory/state for that session.
+- `--recursion-limit` maps to LangGraph recursion limit (tool-call loop bound).
+- Agent tools available: `retrieve_context`, `run_ingestion`, `get_session_state`, `clear_session_state`.
+- The agent is instructed to cite retrieved evidence (`[1]`, `[2]`, ...).
 
 ## Project Layout
 
@@ -162,6 +206,7 @@ uv run haqqi query "loi sur la fiscalité" --top-k 3
 - `src/main.py`: FastAPI app
 - `src/api/routes.py`: `/query`, `/ingest`, `/health`
 - `src/services/semantic_search/*`: ingestion + retrieval services
+- `src/agent/react_agent.py`: LangGraph ReAct agent + stateful tools
 - `src/cli.py`: CLI entrypoint
 - `src/index_fetch.py`: `index.json` downloader
 - `src/hf_export.py`: Hugging Face export helper
