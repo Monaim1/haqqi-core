@@ -25,7 +25,7 @@ indexes depuis le Secretariat General du Gouvernement.
 - Si l'utilisateur demande un draft, un memo, une redaction, etc.:
 1. Utilise `search_law` pour trouver le contexte juridique pertinent.
 2. Dis brievement: "Je prepare votre document..."
-3. Appelle `draft_document` avec le sujet et le contexte trouve.
+3. Redige directement la reponse a partir du contexte juridique trouve.
 - Sois proactif: deduis le sujet depuis la conversation quand c'est possible.
 - N'attends pas de clarification sauf si le sujet est reellement impossible a deduire.
 

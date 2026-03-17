@@ -1,16 +1,13 @@
 from __future__ import annotations
 
-import json
 import os
 from collections.abc import Callable
-from dataclasses import asdict
 from typing import Any
 
-from src.config import Settings
 from src.agent.middleware import HumanInTheLoopMiddleware
 from src.agent.prompts import GROUNDED_REACT_SYSTEM_PROMPT
+from src.config import Settings
 from src.services.semantic_search import SemanticSearchService
-from src.services.semantic_search.ingestion import IngestionProgressEvent
 
 
 def _extract_text(content: Any) -> str:
@@ -68,8 +65,6 @@ class GroundedRetrievalAgent:
                     "tool_calls": 0,
                     "last_query": "",
                     "last_hits": [],
-                    "last_draft": "",
-                    "last_ingestion_report": None,
                 }
             return self._session_state[thread]
 
@@ -100,97 +95,10 @@ class GroundedRetrievalAgent:
                 )
             return "\n\n".join(lines)
 
-        @tool
-        def draft_document(topic: str, legal_context: str) -> str:
-            """Create a legal draft from a topic and grounded legal context snippets."""
-            thread = self._active_thread_id or "default"
-            if not self._middleware.before_tool_call(thread_id=thread, tool_name="draft_document"):
-                self._middleware.register_pending(thread_id=thread, tool_name="draft_document")
-                return "Tool call blocked by middleware placeholder (human approval required)."
-            state = _state_for_current_thread()
-            state["tool_calls"] += 1
-            draft = (
-                f"## Projet - {topic}\n\n"
-                "### Objet\n"
-                f"{topic}\n\n"
-                "### Base juridique (extraits)\n"
-                f"{legal_context.strip()}\n\n"
-                "### Analyse\n"
-                "A adapter selon votre cas. Verifiez les textes applicables et la date de publication.\n\n"
-                "### Avertissement\n"
-                "Ce contenu est informatif et ne remplace pas l'avis d'un avocat."
-            )
-            state["last_draft"] = draft
-            return draft
-
-        @tool
-        def run_ingestion(
-            limit: int | None = None,
-            include_colbert: bool = True,
-        ) -> str:
-            """Index documents into Qdrant. Use this if retrieval returns no results because collection is empty."""
-            thread = self._active_thread_id or "default"
-            if not self._middleware.before_tool_call(thread_id=thread, tool_name="run_ingestion"):
-                self._middleware.register_pending(thread_id=thread, tool_name="run_ingestion")
-                return "Tool call blocked by middleware placeholder (human approval required)."
-            state = _state_for_current_thread()
-            progress_events: list[dict[str, Any]] = []
-
-            def _progress(event: IngestionProgressEvent) -> None:
-                progress_events.append(asdict(event))
-
-            dense = self._service.ingest_dense(limit=limit, progress_callback=_progress)
-            colbert = self._service.ingest_colbert(limit=limit, progress_callback=_progress) if include_colbert else None
-            payload = {
-                "dense": asdict(dense),
-                "colbert": asdict(colbert) if colbert is not None else None,
-                "events": progress_events,
-            }
-            state["tool_calls"] += 1
-            state["last_ingestion_report"] = payload
-            return json.dumps(payload, ensure_ascii=False)
-
-        @tool
-        def get_session_state() -> str:
-            """Return current thread state (last query, last hits, ingestion status)."""
-            thread = self._active_thread_id or "default"
-            if not self._middleware.before_tool_call(thread_id=thread, tool_name="get_session_state"):
-                self._middleware.register_pending(thread_id=thread, tool_name="get_session_state")
-                return "Tool call blocked by middleware placeholder (human approval required)."
-            state = _state_for_current_thread()
-            return json.dumps(
-                {
-                    **state,
-                    "middleware": {
-                        "enabled": self._middleware.enabled,
-                        "tool_call_count": self._middleware.tool_call_counts.get(thread, 0),
-                        "pending_approvals": self._middleware.pending_approvals.get(thread, []),
-                    },
-                },
-                ensure_ascii=False,
-            )
-
-        @tool
-        def clear_session_state() -> str:
-            """Clear this thread's state."""
-            thread = self._active_thread_id or "default"
-            if not self._middleware.before_tool_call(thread_id=thread, tool_name="clear_session_state"):
-                self._middleware.register_pending(thread_id=thread, tool_name="clear_session_state")
-                return "Tool call blocked by middleware placeholder (human approval required)."
-            self._session_state[thread] = {
-                "tool_calls": 0,
-                "last_query": "",
-                "last_hits": [],
-                "last_draft": "",
-                "last_ingestion_report": None,
-            }
-            self._middleware.clear_thread(thread)
-            return "Session state cleared."
-
         checkpointer = MemorySaver()
         return create_react_agent(
             model=model,
-            tools=[search_law, draft_document, run_ingestion, get_session_state, clear_session_state],
+            tools=[search_law],
             prompt=GROUNDED_REACT_SYSTEM_PROMPT,
             checkpointer=checkpointer,
         )

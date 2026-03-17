@@ -199,7 +199,6 @@ uv run haqqi agent --question "Résume le sujet du document" --thread-id smoke -
 
 The repository now includes a simple **LangGraph ReAct agent** that can:
 - retrieve grounded snippets from the indexed legal corpus,
-- trigger ingestion when needed,
 - keep thread-level state across turns.
 - recurse through tool calls up to a configurable recursion limit.
 
@@ -224,7 +223,7 @@ uv run haqqi agent --thread-id demo
 Notes:
 - `--thread-id` keeps memory/state for that session.
 - `--recursion-limit` maps to LangGraph recursion limit (tool-call loop bound).
-- Agent tools available: `search_law`, `draft_document`, `run_ingestion`, `get_session_state`, `clear_session_state`.
+- Agent tool available: `search_law`.
 - System prompt is separated in `src/agent/prompts.py`.
 - A placeholder HITL middleware is wired in `src/agent/middleware.py` (currently allow-all + tool-call counting).
 - The agent is instructed to cite retrieved evidence (`[1]`, `[2]`, ...).
